@@ -1,0 +1,3 @@
+# UE 바이너리 에셋 (LFS 쓰게 되면 여기서 전환)
+*.uasset binary
+*.umap binary

@@ -1,0 +1,22 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "{DD449BF7-4929-4B37-A3A0-1F9FFE211EF4}",
+	"Category": "",
+	"Description": "",
+	"Modules": [
+		{
+			"Name": "Who_Is_VS_Porting",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "ModelingToolsEditorMode",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		}
+	]
+}
