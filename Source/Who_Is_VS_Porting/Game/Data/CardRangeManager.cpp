@@ -4,34 +4,11 @@
 
 #include "CoreMinimal.h"
 
+#include "CsvUtil.h"
+
 #include <fstream>
-#include <sstream>
 
 DEFINE_LOG_CATEGORY_STATIC(LogCardRange, Log, All);
-
-static std::vector<std::string> Split(const std::string& line, char delim)
-{
-    std::vector<std::string> tokens;
-    std::stringstream ss(line);
-    std::string item;
-
-    while (std::getline(ss, item, delim))
-    {
-        tokens.push_back(item);
-    }
-    return tokens;
-}
-
-static void RemoveBOM(std::string& s)
-{
-    if (s.size() >= 3 &&
-        (unsigned char)s[0] == 0xEF &&
-        (unsigned char)s[1] == 0xBB &&
-        (unsigned char)s[2] == 0xBF)
-    {
-        s.erase(0, 3);
-    }
-}
 
 bool CardRangeManager::LoadFromCSV(const std::string& path)
 {
@@ -47,10 +24,10 @@ bool CardRangeManager::LoadFromCSV(const std::string& path)
 
     while (std::getline(file, line))
     {
-        auto cols = Split(line, ',');
+        auto cols = yunocsv::Split(line, ',');
         if (cols.empty()) continue;
 
-        RemoveBOM(cols[0]);
+        yunocsv::RemoveBOM(cols[0]);
 
         RangeData range;
         range.rangeId = std::stoul(cols[0]);

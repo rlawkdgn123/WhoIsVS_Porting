@@ -64,4 +64,21 @@ private:
 
     FTSTicker::FDelegateHandle TickHandle;
     bool bSentHello = false; // 연결 후 검증 Ping 1회 송신 여부
+
+public:
+    // ── 매치 상태 (원본 GameManager의 매치 흐름 필수 필드만 경량 이식) ──
+    struct FRoundUnit
+    {
+        uint8 PID = 0, SlotID = 0, WeaponID = 0, HP = 0, Stamina = 0, SpawnTileId = 0;
+    };
+
+    int32 GetSlotIdx() const { return SlotIdx; }
+    bool IsRoundStarted() const { return bRoundStarted; }
+
+private:
+    int32 SlotIdx = -1;          // EnterOK로 받는 내 슬롯 (원본 GameManager::SetSlotIdx)
+    int32 MatchPlayerCount = 0;
+    bool  bWeaponSubmitted = false;
+    bool  bRoundStarted = false;
+    FRoundUnit RoundUnits[4];    // RoundStart 수신 유닛 (원본 SetWeaponData)
 };

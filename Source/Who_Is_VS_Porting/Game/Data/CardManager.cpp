@@ -5,38 +5,13 @@
 
 #include "CoreMinimal.h"
 
+#include "CsvUtil.h"
+
 #include <fstream>
-#include <sstream>
 #include <stdexcept>
 #include <vector>
 
 DEFINE_LOG_CATEGORY_STATIC(LogCardData, Log, All);
-
-// CSV 한 줄 분리 유틸
-static std::vector<std::string> Split(const std::string& line, char delim)
-{
-    std::vector<std::string> tokens;
-    std::stringstream ss(line);
-    std::string item;
-
-    while (std::getline(ss, item, delim))
-    {
-        tokens.push_back(item);
-    }
-    return tokens;
-}
-
-// BOM 제거 유틸
-static void RemoveBOM(std::string& s)
-{
-    if (s.size() >= 3 &&
-        (unsigned char)s[0] == 0xEF &&
-        (unsigned char)s[1] == 0xBB &&
-        (unsigned char)s[2] == 0xBF)
-    {
-        s.erase(0, 3);
-    }
-}
 
 // string(UTF-8) -> wstring
 static std::wstring Utf8ToWString(const std::string& str)
@@ -68,11 +43,11 @@ bool CardManager::LoadFromCSV(const std::string& path)
         if (line.empty())
             continue;
 
-        auto cols = Split(line, ',');
+        auto cols = yunocsv::Split(line, ',');
 
         if (!cols.empty())
         {
-            RemoveBOM(cols[0]);
+            yunocsv::RemoveBOM(cols[0]);
         }
 
         // 최소 컬럼 수 방어
