@@ -9,11 +9,16 @@
 #include "C2S_MatchEnter.h"
 #include "C2S_ReadySet.h"
 #include "C2S_SubmitWeapon.h"
+#include "C2S_BattlePackets.h"
+#include "C2S_CardPackets.h"
 #include "S2C_Pong.h"
 #include "S2C_EnterOK.h"
 #include "S2C_ReadyState.h"
 #include "S2C_CountDown.h"
 #include "S2C_RoundStart.h"
+#include "S2C_CardPackets.h"
+#include "S2C_BattlePackets.h"
+#include "S2C_EndGame.h"
 #include "S2C_Error.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogYunoNetSub, Log, All);
@@ -217,6 +222,155 @@ void UYunoNetSubsystem::RegisterDefaultHandlers()
         {
             UE_LOG(LogYunoNetSub, Warning, TEXT("[YunoNet] <- S2C_Error bodyLen=%u"), BodyLen);
         });
+
+    // ── 전투 턴 루프 (원본 YunoClientNetwork 300~600행 흐름) ──
+
+    // StartCardList: 라운드 시작 카드 배정 — 내 것만 보관
+    NetDispatcher.RegisterRaw(PacketType::S2C_StartCardList,
+        [this](const NetPeer&, const PacketHeader&, const std::uint8_t* Body, std::uint32_t BodyLen)
+        {
+            ByteReader R(Body, BodyLen);
+            const auto Pkt = packets::S2C_StartCardList::Deserialize(R);
+
+            MyCardRuntimeIds.Reset();
+            for (const auto& C : Pkt.cards)
+            {
+                if (C.PID == static_cast<uint8_t>(SlotIdx))
+                {
+                    MyCardRuntimeIds.Add(C.runtimeID);
+                }
+            }
+            UE_LOG(LogYunoNetSub, Log, TEXT("[YunoNet] <- S2C_StartCardList total=%d mine=%d"),
+                static_cast<int32>(Pkt.cards.size()), MyCardRuntimeIds.Num());
+        });
+
+    // StartTurn: 턴 시작 + 드로우 2장 → 자동 제출 (M3a: UI 전 봇 검증)
+    NetDispatcher.RegisterRaw(PacketType::S2C_StartTurn,
+        [this](const NetPeer&, const PacketHeader&, const std::uint8_t* Body, std::uint32_t BodyLen)
+        {
+            ByteReader R(Body, BodyLen);
+            const auto Pkt = packets::S2C_StartTurn::Deserialize(R);
+            CurrentTurn = Pkt.turnNumber;
+
+            for (const auto& C : Pkt.addedCards)
+            {
+                if (C.PID == static_cast<uint8_t>(SlotIdx) && C.runtimeID != 0)
+                {
+                    MyCardRuntimeIds.Add(C.runtimeID);
+                }
+            }
+            UE_LOG(LogYunoNetSub, Log, TEXT("[YunoNet] <- S2C_StartTurn turn=%d (myCards=%d)"),
+                CurrentTurn, MyCardRuntimeIds.Num());
+
+            SubmitTurnAuto();
+        });
+
+    // BattleResult: 카드 1장 해석 결과 (턴당 여러 번 수신)
+    NetDispatcher.RegisterRaw(PacketType::S2C_BattleResult,
+        [](const NetPeer&, const PacketHeader&, const std::uint8_t* Body, std::uint32_t BodyLen)
+        {
+            ByteReader R(Body, BodyLen);
+            const auto Pkt = packets::S2C_BattleResult::Deserialize(R);
+            UE_LOG(LogYunoNetSub, Log,
+                TEXT("[YunoNet] <- S2C_BattleResult card=%u owner=%u unit=%u steps=%d"),
+                Pkt.runtimeCardId, Pkt.ownerSlot, Pkt.unitLocalIndex,
+                static_cast<int32>(Pkt.order.size()));
+        });
+
+    // ObstacleResult = 턴 연출 마지막 패킷. 원본은 PlayGridSystem이 연출 소진 후
+    // C2S_RoundStartReadyOK를 보냄(PlayGridSystem.cpp:518) — 봇은 즉시 전송
+    // (라운드 진행 중엔 서버가 무시하므로 안전)
+    NetDispatcher.RegisterRaw(PacketType::S2C_ObstacleResult,
+        [this](const NetPeer&, const PacketHeader&, const std::uint8_t* Body, std::uint32_t BodyLen)
+        {
+            ByteReader R(Body, BodyLen);
+            const auto Pkt = packets::S2C_ObstacleResult::Deserialize(R);
+            UE_LOG(LogYunoNetSub, Log, TEXT("[YunoNet] <- S2C_ObstacleResult obstacles=%d"),
+                static_cast<int32>(Pkt.obstacles.size()));
+
+            packets::C2S_RoundStartReadyOK Ok{};
+            auto Bytes = PacketBuilder::Build(PacketType::C2S_RoundStartReadyOK,
+                [&](ByteWriter& W) { Ok.Serialize(W); });
+            UE_LOG(LogYunoNetSub, Log, TEXT("[YunoNet] -> C2S_RoundStartReadyOK (연출완료 ACK)"));
+            SendPacket(MoveTemp(Bytes));
+        });
+
+    // DrawCandidates: 보너스 카드 후보 3장 — 봇은 첫 장 자동 선택
+    // (양쪽 모두 선택해야 서버가 다음 턴 시작: RoundController::OnPlayerSelectedCard)
+    NetDispatcher.RegisterRaw(PacketType::S2C_DrawCandidates,
+        [this](const NetPeer&, const PacketHeader&, const std::uint8_t* Body, std::uint32_t BodyLen)
+        {
+            ByteReader R(Body, BodyLen);
+            const auto Pkt = packets::S2C_DrawCandidates::Deserialize(R);
+
+            uint32 PickId = 0;
+            for (const auto& C : Pkt.cards)
+            {
+                if (C.PID == static_cast<uint8_t>(SlotIdx) && C.runtimeID != 0)
+                {
+                    PickId = C.runtimeID;
+                    break;
+                }
+            }
+            UE_LOG(LogYunoNetSub, Log, TEXT("[YunoNet] <- S2C_DrawCandidates n=%d pick=%u"),
+                static_cast<int32>(Pkt.cards.size()), PickId);
+
+            if (PickId != 0)
+            {
+                packets::C2S_SelectCard Sel{};
+                Sel.runtimeID = PickId;
+                auto Bytes = PacketBuilder::Build(PacketType::C2S_SelectCard,
+                    [&](ByteWriter& W) { Sel.Serialize(W); });
+                UE_LOG(LogYunoNetSub, Log, TEXT("[YunoNet] -> C2S_SelectCard runtimeID=%u (auto)"), PickId);
+                SendPacket(MoveTemp(Bytes));
+            }
+        });
+
+    // EndGame: 승자 판정 (원본 로직 동일)
+    NetDispatcher.RegisterRaw(PacketType::S2C_EndGame,
+        [this](const NetPeer&, const PacketHeader&, const std::uint8_t* Body, std::uint32_t BodyLen)
+        {
+            ByteReader R(Body, BodyLen);
+            const auto Pkt = packets::S2C_EndGame::Deserialize(R);
+
+            const uint8 P1 = Pkt.results[0].winCount;
+            const uint8 P2 = Pkt.results[1].winCount;
+            WinnerPID = (P1 > P2) ? 1 : (P1 < P2) ? 2 : -1;
+            bEndGame = true;
+
+            UE_LOG(LogYunoNetSub, Log, TEXT("[YunoNet] <- S2C_EndGame p1Wins=%u p2Wins=%u winner=%d"),
+                P1, P2, WinnerPID);
+        });
+
+    NetDispatcher.RegisterRaw(PacketType::S2C_EndGame_Disconnect,
+        [this](const NetPeer&, const PacketHeader&, const std::uint8_t*, std::uint32_t)
+        {
+            bEndGame = true;
+            UE_LOG(LogYunoNetSub, Warning, TEXT("[YunoNet] <- S2C_EndGame_Disconnect (상대 이탈)"));
+        });
+}
+
+// 내 카드 앞 4장을 dir=Up으로 제출 — 원본 CardConfirmPanel 확정 흐름의 봇 대체.
+// M3b(UMG)에서 유저 선택으로 교체 예정.
+void UYunoNetSubsystem::SubmitTurnAuto()
+{
+    using namespace yuno::net;
+
+    packets::C2S_ReadyTurn Req{};
+    const int32 SubmitCount = FMath::Min(4, MyCardRuntimeIds.Num());
+    for (int32 i = 0; i < SubmitCount; ++i)
+    {
+        CardPlayCommand Cmd{};
+        Cmd.runtimeID = MyCardRuntimeIds[i];
+        Cmd.dir = Direction::Up;
+        Req.commands.push_back(Cmd);
+    }
+
+    auto Bytes = PacketBuilder::Build(PacketType::C2S_ReadyTurn,
+        [&](ByteWriter& W) { Req.Serialize(W); });
+
+    UE_LOG(LogYunoNetSub, Log, TEXT("[YunoNet] -> C2S_ReadyTurn commands=%d (auto)"), SubmitCount);
+    SendPacket(MoveTemp(Bytes));
 }
 
 bool UYunoNetSubsystem::TickPump(float /*DeltaTime*/)

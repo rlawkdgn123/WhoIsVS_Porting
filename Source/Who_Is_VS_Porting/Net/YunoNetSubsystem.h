@@ -81,4 +81,12 @@ private:
     bool  bWeaponSubmitted = false;
     bool  bRoundStarted = false;
     FRoundUnit RoundUnits[4];    // RoundStart 수신 유닛 (원본 SetWeaponData)
+
+    // ── 전투 턴 루프 (M3a: UI 전 단계, 자동 제출 봇으로 루프 검증) ──
+    void SubmitTurnAuto();       // 내 카드 앞 4장을 dir=Up으로 제출 (원본 CardConfirm 흐름 대체)
+
+    TArray<uint32> MyCardRuntimeIds; // StartCardList/StartTurn으로 받은 내 카드
+    int32 CurrentTurn = 0;
+    bool  bEndGame = false;
+    int32 WinnerPID = 0;
 };
