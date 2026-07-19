@@ -21,6 +21,15 @@
 
 #include "YunoNetSubsystem.generated.h"
 
+// UI(UMG/BP)가 구독하는 매치 이벤트들 — 원본의 GameManager SceneState 전환에 대응
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FYunoEnterOK, int32, SlotIdx, int32, PlayerCount);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FYunoReadyState, bool, bP1Ready, bool, bP2Ready);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FYunoCountDown, int32, CountTime);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FYunoRoundStart);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FYunoTurnStart, int32, TurnNumber, int32, MyCardCount);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FYunoDrawCandidates, const TArray<int64>&, RuntimeIds);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FYunoEndGame, int32, WinnerPID);
+
 UCLASS()
 class WHO_IS_VS_PORTING_API UYunoNetSubsystem : public UGameInstanceSubsystem
 {
@@ -51,6 +60,36 @@ public:
     void SendPacket(std::vector<std::uint8_t>&& PacketBytes);
 
     yuno::net::PacketDispatcher& Dispatcher() { return NetDispatcher; }
+
+    // ── UI용 이벤트 (게임 스레드에서 브로드캐스트) ──
+    UPROPERTY(BlueprintAssignable, Category = "YunoNet|Events") FYunoEnterOK OnEnterOK;
+    UPROPERTY(BlueprintAssignable, Category = "YunoNet|Events") FYunoReadyState OnReadyState;
+    UPROPERTY(BlueprintAssignable, Category = "YunoNet|Events") FYunoCountDown OnCountDown;
+    UPROPERTY(BlueprintAssignable, Category = "YunoNet|Events") FYunoRoundStart OnRoundStart;
+    UPROPERTY(BlueprintAssignable, Category = "YunoNet|Events") FYunoTurnStart OnTurnStart;
+    UPROPERTY(BlueprintAssignable, Category = "YunoNet|Events") FYunoDrawCandidates OnDrawCandidates;
+    UPROPERTY(BlueprintAssignable, Category = "YunoNet|Events") FYunoEndGame OnEndGame;
+
+    // ── UI용 액션 (봇 대신 유저 입력이 호출) ──
+    // 자동 봇 켬/끔 (UI가 준비되면 끄고 아래 액션 사용)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YunoNet")
+    bool bAutoBot = true;
+
+    UFUNCTION(BlueprintCallable, Category = "YunoNet|Actions")
+    void SubmitWeapons(int32 WeaponId1, int32 WeaponId2);
+
+    // 내 손패에서 고른 카드들(runtimeID)을 방향과 함께 제출. Dir: 1=Up 2=Down 3=Left 4=Right
+    UFUNCTION(BlueprintCallable, Category = "YunoNet|Actions")
+    void SubmitTurnCards(const TArray<int64>& RuntimeIds, uint8 Dir);
+
+    UFUNCTION(BlueprintCallable, Category = "YunoNet|Actions")
+    void SelectBonusCard(int64 RuntimeId);
+
+    UFUNCTION(BlueprintCallable, Category = "YunoNet|State")
+    int32 GetCurrentTurn() const { return CurrentTurn; }
+
+    UFUNCTION(BlueprintCallable, Category = "YunoNet|State")
+    int32 GetMyCardCount() const { return MyCardRuntimeIds.Num(); }
 
 private:
     bool TickPump(float DeltaTime);
